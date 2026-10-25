@@ -1,0 +1,529 @@
+{
+  "info": {
+    "name": "Sistem Nilai Zero Trust",
+    "description": "Collection untuk tugas Praktikum Zero Trust (Unsil).\n\nSEBELUM PAKAI:\n1. Jalankan stack: docker compose down -v && docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build -d\n2. Demo jam akses (T18) memakai jendela 07.00-21.00 WIB. Rekamlah SEBELUM jam 21 WIB agar request 'PUT nilai' pertama berhasil dan request kedua (setelah rekaman jam) ditolak alami. Alternatif: ubah ACCESS_HOURS di .env lalu 'docker compose up -d --force-recreate gateway'.\n3. Password semua akun: Password123!\n\nFolder DEMO_URUTAN berisi alur rekaman video 6-9 menit (lihat docs/DEMO.md).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "serviceNilaiUrl", "value": "http://localhost:3001" },
+    { "key": "transkripUrl", "value": "http://localhost:3002" },
+    { "key": "password", "value": "Password123!" },
+    { "key": "gatewaySecret", "value": "GANTI_DENGAN_Isi_GATEWAY_SECRET_di_file_.env" },
+    { "key": "serviceClientSecret", "value": "GANTI_DENGAN_Isi_SERVICE_NILAI_CLIENT_SECRET_di_file_.env" },
+    { "key": "dosen1Token", "value": "" },
+    { "key": "dosen1Refresh", "value": "" },
+    { "key": "dosen2Token", "value": "" },
+    { "key": "mhs1Token", "value": "" },
+    { "key": "mhs1Refresh", "value": "" },
+    { "key": "adminToken", "value": "" },
+    { "key": "svcToken", "value": "" },
+    { "key": "kelasAId", "value": "" },
+    { "key": "nilaiAId", "value": "" },
+    { "key": "kelasBId", "value": "" },
+    { "key": "nilaiBId", "value": "" }
+  ],
+  "auth": {
+    "type": "noauth"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "POST /auth/login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.success) {",
+                  "  pm.collectionVariables.set('dosen1Token', b.data.accessToken);",
+                  "  pm.collectionVariables.set('dosen1Refresh', b.data.refreshToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Device-ID", "value": "DOSEN1-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"dosen1@unsil.test\",\n  \"password\": \"{{password}}\"\n}" },
+            "description": "Login dosen1. Menyimpan dosen1Token & dosen1Refresh ke variabel collection. 401 LOGIN_INVALID_CREDENTIALS / 403 DEVICE_* jika konteks salah."
+          }
+        },
+        {
+          "name": "POST /auth/refresh",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/refresh", "host": ["{{baseUrl}}"], "path": ["auth", "refresh"] },
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{dosen1Refresh}}\"\n}" },
+            "description": "Rotasi refresh token: token lama dicabut, pasangan baru diterbitkan. Panggil dua kali → yang kedua 401 REFRESH_REVOKED."
+          }
+        },
+        {
+          "name": "POST /auth/logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/logout", "host": ["{{baseUrl}}"], "path": ["auth", "logout"] },
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{dosen1Refresh}}\"\n}" },
+            "description": "Mencabut refresh token (idempotent, selalu 200). Access token tetap sah sampai exp maks 10 menit."
+          }
+        },
+        {
+          "name": "POST /auth/service",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/service", "host": ["{{baseUrl}}"], "path": ["auth", "service"] },
+            "body": { "mode": "raw", "raw": "{\n  \"clientId\": \"service-nilai\",\n  \"clientSecret\": \"{{serviceClientSecret}}\"\n}" },
+            "description": "Token service 5 menit (role: service) untuk komunikasi antar-service lewat gateway. Secret salah → 401 SERVICE_CLIENT_INVALID."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Nilai",
+      "item": [
+        {
+          "name": "GET /nilai (dosen)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.success && b.data.length) {",
+                  "  pm.collectionVariables.set('kelasAId', b.data[0].kelasId);",
+                  "  pm.collectionVariables.set('nilaiAId', b.data[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{dosen1Token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "X-Device-ID", "value": "DOSEN1-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/nilai", "host": ["{{baseUrl}}"], "path": ["nilai"] },
+            "description": "Dosen melihat nilai kelas yang ia ampu. Menyimpan kelasAId & nilaiAId. Query: ?nim= (milik sendiri), ?kelasId= (harus kelas sendiri)."
+          }
+        },
+        {
+          "name": "GET /nilai (mahasiswa — hanya FINAL miliknya)",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{mhs1Token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "X-Device-ID", "value": "MHS1-HP-01" }],
+            "url": { "raw": "{{baseUrl}}/nilai", "host": ["{{baseUrl}}"], "path": ["nilai"] },
+            "description": "Mahasiswa hanya melihat nilai berstatus FINAL miliknya. Sebelum finalisasi → array kosong (draft tersembunyi)."
+          }
+        },
+        {
+          "name": "PUT /nilai/:id",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{dosen1Token}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Device-ID", "value": "DOSEN1-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/nilai/{{nilaiAId}}", "host": ["{{baseUrl}}"], "path": ["nilai", "{{nilaiAId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"score\": 91.5\n}" },
+            "description": "Dosen pengampu mengubah skor (0-100). Tolakan: ROLE_NOT_ALLOWED, CLASS_NOT_OWNED, NILAI_ALREADY_FINAL, OUTSIDE_ACCESS_HOURS."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Kelas",
+      "item": [
+        {
+          "name": "POST /kelas/:id/finalisasi",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{dosen1Token}}", "type": "string" }] },
+            "method": "POST",
+            "header": [{ "key": "X-Device-ID", "value": "DOSEN1-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/kelas/{{kelasAId}}/finalisasi", "host": ["{{baseUrl}}"], "path": ["kelas", "{{kelasAId}}", "finalisasi"] },
+            "description": "Final → semua nilai FINAL → Service Nilai ambil token service → POST /transkrip/sinkron LEWAT gateway.\n200 transkripTersinkron | 409 KELAS_SUDAH_FINAL | 422 NILAI_KOSONG | 502 SINKRON_TRANSKRIP_GAGAL (retry aman)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Transkrip",
+      "item": [
+        {
+          "name": "GET /transkrip/:nim",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{mhs1Token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "X-Device-ID", "value": "MHS1-HP-01" }],
+            "url": { "raw": "{{baseUrl}}/transkrip/247006111001", "host": ["{{baseUrl}}"], "path": ["transkrip", "247006111001"] },
+            "description": "Transkrip + IPK. MAHASISWA: NIM sendiri saja (NOT_OWNER jika lain); ADMIN: semua NIM; DOSEN: ROLE_NOT_ALLOWED. NIM tidak ada → 404."
+          }
+        },
+        {
+          "name": "POST /transkrip/sinkron (hanya token service)",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{svcToken}}", "type": "string" }] },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/transkrip/sinkron", "host": ["{{baseUrl}}"], "path": ["transkrip", "sinkron"] },
+            "body": { "mode": "raw", "raw": "{\n  \"kelasId\": \"{{kelasBId}}\",\n  \"kodeMk\": \"IF302\",\n  \"mataKuliah\": \"Basis Data\",\n  \"sks\": 3,\n  \"semester\": \"2026/Ganjil\",\n  \"entries\": []\n}" },
+            "description": "Biasanya dipanggil otomatis oleh Service Nilai. Token user (termasuk admin) → 403 SERVICE_ONLY. Jalankan POST /auth/service dulu untuk mengisi svcToken."
+          }
+        }
+      ]
+    },
+    {
+      "name": "System",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }, "description": "Liveness tanpa autentikasi." }
+        },
+        {
+          "name": "GET /docs (Swagger UI)",
+          "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/docs", "host": ["{{baseUrl}}"], "path": ["docs"] }, "description": "Swagger UI, aktif hanya jika SWAGGER_ENABLED=true." }
+        }
+      ]
+    },
+    {
+      "name": "★ DEMO_URUTAN (rekaman ≤9 menit)",
+      "description": "Jalankan ATAS KE BAWAH, satu klik per request. Nomor = urutan bicara. Sertakan screenshot docker compose ps + scripts/show-audit.sh.",
+      "item": [
+        {
+          "name": "00a Health gateway",
+          "request": { "method": "GET", "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }, "description": "[0:00] Bicara: hanya gateway yang punya port publik (docker-compose.yml)." }
+        },
+        {
+          "name": "00b Login dosen1 (ambil token+ID)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set('dosen1Token', b.data.accessToken);",
+                  "pm.collectionVariables.set('dosen1Refresh', b.data.refreshToken);",
+                  "pm.sendRequest({ url: pm.collectionVariables.get('baseUrl') + '/nilai', method: 'GET', header: [{ key: 'Authorization', value: 'Bearer ' + b.data.accessToken }, { key: 'X-Device-ID', value: 'DOSEN1-LAPTOP-01' }] }, (err, res) => {",
+                  "  const n = res.json();",
+                  "  if (n.success && n.data.length) {",
+                  "    pm.collectionVariables.set('kelasAId', n.data[0].kelasId);",
+                  "    pm.collectionVariables.set('nilaiAId', n.data[0].id);",
+                  "  }",
+                  "});",
+                  "pm.sendRequest({ url: pm.collectionVariables.get('baseUrl') + '/auth/login', method: 'POST', header: [{ key: 'Content-Type', value: 'application/json' }, { key: 'X-Device-ID', value: 'MHS1-HP-01' }], body: { mode: 'raw', raw: JSON.stringify({ email: 'mhs1@unsil.test', password: pm.collectionVariables.get('password') }) } }, (err, res) => {",
+                  "  const m = res.json();",
+                  "  if (m.success) {",
+                  "    pm.collectionVariables.set('mhs1Token', m.data.accessToken);",
+                  "    pm.collectionVariables.set('mhs1Refresh', m.data.refreshToken);",
+                  "  }",
+                  "});",
+                  "pm.sendRequest({ url: pm.collectionVariables.get('baseUrl') + '/auth/login', method: 'POST', header: [{ key: 'Content-Type', value: 'application/json' }, { key: 'X-Device-ID', value: 'ADMIN-LAPTOP-01' }], body: { mode: 'raw', raw: JSON.stringify({ email: 'admin@unsil.test', password: pm.collectionVariables.get('password') }) } }, (err, res) => {",
+                  "  const a = res.json();",
+                  "  if (a.success) pm.collectionVariables.set('adminToken', a.data.accessToken);",
+                  "});",
+                  "pm.sendRequest({ url: pm.collectionVariables.get('baseUrl') + '/auth/login', method: 'POST', header: [{ key: 'Content-Type', 'value': 'application/json' }, { key: 'X-Device-ID', value: 'DOSEN2-LAPTOP-01' }], body: { mode: 'raw', raw: JSON.stringify({ email: 'dosen2@unsil.test', password: pm.collectionVariables.get('password') }) } }, (err, res) => {",
+                  "  const d2 = res.json();",
+                  "  if (d2.success) {",
+                  "    pm.collectionVariables.set('dosen2Token', d2.data.accessToken);",
+                  "    pm.sendRequest({ url: pm.collectionVariables.get('baseUrl') + '/nilai', method: 'GET', header: [{ key: 'Authorization', value: 'Bearer ' + d2.data.accessToken }, { key: 'X-Device-ID', value: 'DOSEN2-LAPTOP-01' }] }, (e2, r2) => {",
+                  "      const n2 = r2.json();",
+                  "      if (n2.success && n2.data.length) {",
+                  "        pm.collectionVariables.set('kelasBId', n2.data[0].kelasId);",
+                  "        pm.collectionVariables.set('nilaiBId', n2.data[0].id);",
+                  "      }",
+                  "    });",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Device-ID", "value": "DOSEN1-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"dosen1@unsil.test\",\n  \"password\": \"{{password}}\"\n}" },
+            "description": "[0:50] Bicara: kebutuhan 4.1 — token access 10 menit berisi sub+role (lihat token.service.js). Script ini diam-diam menyiapkan semua token & id agar demo berikutnya tinggal klik. T01."
+          }
+        },
+        {
+          "name": "01 Login device TIDAK terdaftar (DITOLAK)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Device-ID", "value": "DEVICE-PEMBORONG" }],
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"dosen1@unsil.test\",\n  \"password\": \"{{password}}\"\n}" },
+            "description": "[1:10] Kebutuhan 4.1+4.3: kredensial benar pun belum cukup — device harus terdaftar (auth.service.js). T02."
+          }
+        },
+        {
+          "name": "02 Login password salah (pesan generik)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Device-ID", "value": "DOSEN1-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"dosen1@unsil.test\",\n  \"password\": \"rahasia-tebakan\"\n}" },
+            "description": "[1:30] Pesan selalu 'Email atau password salah' — tidak membocorkan email mana yang ada. T04."
+          }
+        },
+        {
+          "name": "03 Refresh token (rotasi: yang lama dicabut)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.success) pm.collectionVariables.set('dosen1Token', b.data.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/refresh", "host": ["{{baseUrl}}"], "path": ["auth", "refresh"] },
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{mhs1Refresh}}\"\n}" },
+            "description": "[1:45] Kebutuhan 4.1: refresh token disimpan sebagai hash SHA-256 & dirotasi (refresh-token.repository.js). Jalankan DUA kali → yang kedua 401 REFRESH_REVOKED. T05. Token dosen1 ikut diperbarui via test script jika body diganti dosen1Refresh."
+          }
+        },
+        {
+          "name": "04 Token service (benar → 200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.success) pm.collectionVariables.set('svcToken', b.data.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/service", "host": ["{{baseUrl}}"], "path": ["auth", "service"] },
+            "body": { "mode": "raw", "raw": "{\n  \"clientId\": \"service-nilai\",\n  \"clientSecret\": \"{{serviceClientSecret}}\"\n}" },
+            "description": "[2:00] Kebutuhan 4.1: token service umur 5 menit, role 'service' — dipakai Service Nilai saat finalisasi. T08a."
+          }
+        },
+        {
+          "name": "05 Token service salah → 401",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/service", "host": ["{{baseUrl}}"], "path": ["auth", "service"] },
+            "body": { "mode": "raw", "raw": "{\n  \"clientId\": \"service-nilai\",\n  \"clientSecret\": \"tebakan\"\n}" },
+            "description": "[2:40] SERVICE_CLIENT_INVALID + tercatat di audit. T08b."
+          }
+        },
+        {
+          "name": "06 Akses LANGSUNG service: tanpa secret → 403",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{serviceNilaiUrl}}/nilai", "host": ["{{serviceNilaiUrl}}"], "path": ["nilai"] },
+            "description": "[2:50] Kebutuhan 4.1 pertahanan berlapis (verify-gateway-secret.middleware.js). Perlu docker-compose.demo.yml agar 3001 terlihat. T25a."
+          }
+        },
+        {
+          "name": "07 Akses LANGSUNG: secret benar tanpa token → 401",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "X-Gateway-Secret", "value": "{{gatewaySecret}}" }],
+            "url": { "raw": "{{serviceNilaiUrl}}/nilai", "host": ["{{serviceNilaiUrl}}"], "path": ["nilai"] },
+            "description": "[3:10] Secret saja tidak cukup — token tetap diverifikasi ulang di service. T25b."
+          }
+        },
+        {
+          "name": "08 GET /nilai TANPA token → 401",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/nilai", "host": ["{{baseUrl}}"], "path": ["nilai"] },
+            "description": "[3:30] PEP gateway menolak sebelum policy: TOKEN_MISSING + audit. T09."
+          }
+        },
+        {
+          "name": "09 GET /nilai dosen1 (200 + capture kelasAId)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "if (b.success && b.data.length) {",
+                  "  pm.collectionVariables.set('kelasAId', b.data[0].kelasId);",
+                  "  pm.collectionVariables.set('nilaiAId', b.data[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{dosen1Token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "X-Device-ID", "value": "DOSEN1-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/nilai", "host": ["{{baseUrl}}"], "path": ["nilai"] },
+            "description": "[4:00] Bicara: policy.engine.js + nilai.rules.js. Dosen hanya melihat kelasnya (T14). Device check: device.check.js (T10 — coba ganti X-Device-ID jadi MHS1-HP-01 untuk penolakan)."
+          }
+        },
+        {
+          "name": "10 GET /nilai?kelasId=kelas lain → 403 CLASS_NOT_OWNED",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{dosen1Token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "X-Device-ID", "value": "DOSEN1-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/nilai?kelasId={{kelasBId}}", "host": ["{{baseUrl}}"], "path": ["nilai"], "query": [{ "key": "kelasId", "value": "{{kelasBId}}" }] },
+            "description": "[4:20] IDOR ditolak: kepemilikan dibaca dari DB, bukan dari token. T13b."
+          }
+        },
+        {
+          "name": "11 GET /nilai mhs lain?nim=NIM orang → 403 NOT_OWNER",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{mhs1Token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "X-Device-ID", "value": "MHS1-HP-01" }],
+            "url": { "raw": "{{baseUrl}}/nilai?nim=247006111002", "host": ["{{baseUrl}}"], "path": ["nilai"], "query": [{ "key": "nim", "value": "247006111002" }] },
+            "description": "[4:35] Least privilege per subjek. T12."
+          }
+        },
+        {
+          "name": "12 PUT /nilai sebagai mahasiswa → 403 ROLE_NOT_ALLOWED",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{mhs1Token}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Device-ID", "value": "MHS1-HP-01" }],
+            "url": { "raw": "{{baseUrl}}/nilai/{{nilaiAId}}", "host": ["{{baseUrl}}"], "path": ["nilai", "{{nilaiAId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"score\": 100\n}" },
+            "description": "[4:50] Nilai tidak bisa dimanjeleksi sendiri. T15."
+          }
+        },
+        {
+          "name": "13 PUT /nilai sebagai dosen SALAH kelas → 403 CLASS_NOT_OWNED",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{dosen2Token}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Device-ID", "value": "DOSEN2-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/nilai/{{nilaiAId}}", "host": ["{{baseUrl}}"], "path": ["nilai", "{{nilaiAId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"score\": 100\n}" },
+            "description": "[5:00] Dosen2 tidak mengampu kelas A. T16."
+          }
+        },
+        {
+          "name": "14 PUT /nilai dosen1 sendiri → 200 (dalam jam akses)",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{dosen1Token}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Device-ID", "value": "DOSEN1-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/nilai/{{nilaiAId}}", "host": ["{{baseUrl}}"], "path": ["nilai", "{{nilaiAId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"score\": 91.5\n}" },
+            "description": "[5:10] Kebutuhan 4.3 access-hours.check.js: hanya boleh 07.00-21.00 WIB. T17."
+          }
+        },
+        {
+          "name": "15 POST /transkrip/sinkron dengan token USER → 403 SERVICE_ONLY",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Device-ID", "value": "ADMIN-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/transkrip/sinkron", "host": ["{{baseUrl}}"], "path": ["transkrip", "sinkron"] },
+            "body": { "mode": "raw", "raw": "{\n  \"kelasId\": \"{{kelasAId}}\",\n  \"kodeMk\": \"IF301\",\n  \"mataKuliah\": \"Keamanan Informasi\",\n  \"sks\": 3,\n  \"semester\": \"2026/Ganjil\",\n  \"entries\": []\n}" },
+            "description": "[5:25] Endpoint antar-service dikunci: admin pun ditolak; hanya token service. T24."
+          }
+        },
+        {
+          "name": "16 POST /kelas/:id/finalisasi (sinkron antar-service via gateway)",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{dosen1Token}}", "type": "string" }] },
+            "method": "POST",
+            "header": [{ "key": "X-Device-ID", "value": "DOSEN1-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/kelas/{{kelasAId}}/finalisasi", "host": ["{{baseUrl}}"], "path": ["kelas", "{{kelasAId}}", "finalisasi"] },
+            "description": "[6:00] Klimaks: kelas.service.js + gateway-client.service.js — Service Nilai minta token service lalu memanggil Transkrip LEWAT gateway. Cek transkripTersinkron: true. T19. (Ulang sekali → 409 KELAS_SUDAH_FINAL, T21.)"
+          }
+        },
+        {
+          "name": "17 GET /transkrip mhs1 sendiri → 200 (hasil sinkron + IPK)",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{mhs1Token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "X-Device-ID", "value": "MHS1-HP-01" }],
+            "url": { "raw": "{{baseUrl}}/transkrip/247006111001", "host": ["{{baseUrl}}"], "path": ["transkrip", "247006111001"] },
+            "description": "[6:35] Data hasil finalisasi muncul + IPK dihitung transkrip.service.js. T22a."
+          }
+        },
+        {
+          "name": "18 GET /transkrip NIM orang lain → 403 NOT_OWNER",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{mhs1Token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "X-Device-ID", "value": "MHS1-HP-01" }],
+            "url": { "raw": "{{baseUrl}}/transkrip/247006111002", "host": ["{{baseUrl}}"], "path": ["transkrip", "247006111002"] },
+            "description": "[6:50] T22c."
+          }
+        },
+        {
+          "name": "19 GET /transkrip sebagai ADMIN → 200, dosen → 403",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "X-Device-ID", "value": "ADMIN-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/transkrip/247006111003", "host": ["{{baseUrl}}"], "path": ["transkrip", "247006111003"] },
+            "description": "[7:00] Beda peran di endpoint sama (transkrip.rules.js). Untuk penolakan dosen: ganti token ke {{dosen1Token}} + device → ROLE_NOT_ALLOWED. T23."
+          }
+        },
+        {
+          "name": "20 Route tak dikenal → 403 ROUTE_NOT_ALLOWED (default deny)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/admin", "host": ["{{baseUrl}}"], "path": ["admin"] },
+            "description": "[7:15] Prinsip zero trust: tidak ada route di luar Tabel 3, dan percobaan dicatat di audit. T28a."
+          }
+        },
+        {
+          "name": "21 Logout → refresh berikutnya 401",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/logout", "host": ["{{baseUrl}}"], "path": ["auth", "logout"] },
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{mhs1Refresh}}\"\n}" },
+            "description": "[7:30] Cabut refresh token (T06a). Buka lagi request 03 dan klik → 401 REFRESH_REVOKED sebagai bukti pencabutan bekerja. T06b."
+          }
+        },
+        {
+          "name": "22 AUDIT — jalankan: scripts/show-audit.sh",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Demo 4.4: buka terminal & jalankan scripts/show-audit.sh, tunjukkan baris ALLOW/DENY + reason dari seluruh demo tadi', () => {});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] },
+            "description": "[7:50] Kebutuhan 4.4: seluruh keputusan demo barusan tercatat di tabel audit_logs (waktu, subjek, endpoint, device, hasil, alasan). request ini hanya penanda — yang ditampilkan adalah output scripts/show-audit.sh. T27."
+          }
+        },
+        {
+          "name": "23 (opsional) Jam akses → OUTSIDE_ACCESS_HOURS",
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{dosen2Token}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Device-ID", "value": "DOSEN2-LAPTOP-01" }],
+            "url": { "raw": "{{baseUrl}}/nilai/{{nilaiBId}}", "host": ["{{baseUrl}}"], "path": ["nilai", "{{nilaiBId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"score\": 92\n}" },
+            "description": "[7:35→1] Kebutuhan 4.3: materi ini memakai nilai KELAS B (nilaiBId, milik dosen2) karena nilai kelas A sudah FINAL sejak langkah 16 (kalau dipakai lagi hasilnya NILAI_ALREADY_FINAL, bukan OUTSIDE_ACCESS_HOURS). Rekamlah SETELAH jam 21.00 WIB agar ditolak OUTSIDE_ACCESS_HOURS tanpa ubah config (jam 91.5 di langkah 14 membuktikan sisi ALLOW). Alternatif siangnya: ACCESS_HOURS_START=1 ACCESS_HOURS_END=2 lalu 'docker compose up -d --force-recreate gateway'. T18."
+          }
+        }
+      ]
+    }
+  ]
+}

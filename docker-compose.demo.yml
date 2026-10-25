@@ -1,0 +1,10 @@
+# Kebutuhan uji T25: mendemonstrasikan "akses langsung ke service ditolak".
+# File override ini MENGINI port 3001/3002 khusus untuk demo; JANGAN dipakai di produksi.
+# Cara pakai: docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
+services:
+  service-nilai:
+    ports:
+      - "3001:3001"
+  service-transkrip:
+    ports:
+      - "3002:3002"

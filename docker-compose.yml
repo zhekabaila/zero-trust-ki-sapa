@@ -1,0 +1,122 @@
+# Kebutuhan: seluruh sistem jalan dengan satu perintah `docker compose up --build`.
+# Aturan emas: HANYA gateway yang punya `ports:` (publik). Service aplikasi lain `expose:` saja.
+# Pengecualian dev (diikat ke 127.0.0.1, tidak terjangkau jaringan luar): mysql:3307, phpmyadmin:8081.
+name: sistem-nilai-zero-trust
+
+networks:
+  public:
+  internal:
+
+volumes:
+  mysql-data:
+
+services:
+  mysql:
+    image: mysql:8.4
+    # Dipublikasikan ke 127.0.0.1:3307 hanya untuk dev (Prisma Studio), bukan akses eksternal aplikasi.
+    ports:
+      - "127.0.0.1:3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - internal
+    healthcheck:
+      # -h 127.0.0.1 memaksa cek lewat TCP: saat inisialisasi awal MySQL hanya menjawab di socket,
+      # jadi healthcheck baru hijau ketika DB benar-benar siap menerima aplikasi.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  phpmyadmin:
+    # Alat bantu dev saja: melihat isi tabel (termasuk audit_logs) lewat browser.
+    # Sama seperti mysql, port diikat ke 127.0.0.1 supaya tidak terjangkau dari jaringan luar.
+    # Login: user root, password = MYSQL_ROOT_PASSWORD di .env.
+    image: phpmyadmin:5
+    ports:
+      - "127.0.0.1:8081:80"
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      UPLOAD_LIMIT: 16M
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - internal
+
+  db-init:
+    # Menjalankan migrasi + seed satu kali lalu berhenti (bukan aplikasi yang terus hidup).
+    build:
+      context: .
+      dockerfile: database/Dockerfile
+    env_file: .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - internal
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "3000:3000" # satu-satunya pintu masuk dari luar
+    env_file: .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - public
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js", "3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  service-nilai:
+    build:
+      context: .
+      dockerfile: service-nilai/Dockerfile
+    expose:
+      - "3001"
+    env_file: .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js", "3001"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  service-transkrip:
+    build:
+      context: .
+      dockerfile: service-transkrip/Dockerfile
+    expose:
+      - "3002"
+    env_file: .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js", "3002"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

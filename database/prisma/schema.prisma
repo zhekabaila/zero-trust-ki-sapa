@@ -1,0 +1,164 @@
+// Satu-satunya sumber schema untuk ketiga aplikasi (keputusan D4 di PLAN.md).
+// Dockerfile tiap aplikasi menyalin berkas ini ke ./prisma/ saat build.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native"]
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  MAHASISWA
+  DOSEN
+  ADMIN
+}
+
+enum NilaiStatus {
+  DRAFT
+  FINAL
+}
+
+enum SubjectType {
+  USER
+  SERVICE
+  ANONYMOUS
+}
+
+enum AuditDecision {
+  ALLOW
+  DENY
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  name         String   @db.VarChar(100)
+  email        String   @unique @db.VarChar(120)
+  passwordHash String   @map("password_hash") @db.VarChar(100)
+  role         Role
+  nim          String?  @unique @db.VarChar(20) // hanya mahasiswa
+  nidn         String?  @unique @db.VarChar(20) // hanya dosen
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  devices       Device[]
+  refreshTokens RefreshToken[]
+  kelasDiampu   Kelas[]          @relation("DosenKelas")
+  nilai         Nilai[]
+  transkrip     TranskripEntry[]
+
+  @@map("users")
+}
+
+model Device {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  userId    String   @map("user_id") @db.VarChar(36)
+  deviceId  String   @map("device_id") @db.VarChar(100)
+  label     String?  @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceId])
+  @@map("devices")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  userId    String    @map("user_id") @db.VarChar(36)
+  tokenHash String    @unique @map("token_hash") @db.VarChar(64) // SHA-256 hex
+  deviceId  String    @map("device_id") @db.VarChar(100)
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model ServiceClient {
+  id         String  @id @default(uuid()) @db.VarChar(36)
+  clientId   String  @unique @map("client_id") @db.VarChar(60)
+  secretHash String  @map("secret_hash") @db.VarChar(100)
+  name       String  @db.VarChar(100)
+  isActive   Boolean @default(true) @map("is_active")
+
+  @@map("service_clients")
+}
+
+model Kelas {
+  id                String    @id @default(uuid()) @db.VarChar(36)
+  kode              String    @unique @db.VarChar(20) // cth. IF301-A
+  kodeMk            String    @map("kode_mk") @db.VarChar(20)
+  mataKuliah        String    @map("mata_kuliah") @db.VarChar(100)
+  sks               Int
+  semester          String    @db.VarChar(20) // cth. 2026/Ganjil
+  dosenId           String    @map("dosen_id") @db.VarChar(36)
+  finalizedAt       DateTime? @map("finalized_at")
+  transkripSyncedAt DateTime? @map("transkrip_synced_at")
+
+  dosen User    @relation("DosenKelas", fields: [dosenId], references: [id])
+  nilai Nilai[]
+
+  @@index([dosenId])
+  @@map("kelas")
+}
+
+model Nilai {
+  id          String      @id @default(uuid()) @db.VarChar(36)
+  kelasId     String      @map("kelas_id") @db.VarChar(36)
+  mahasiswaId String      @map("mahasiswa_id") @db.VarChar(36)
+  score       Float?      // 0-100, kosong = belum diisi
+  status      NilaiStatus @default(DRAFT)
+  finalizedAt DateTime?   @map("finalized_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  kelas     Kelas @relation(fields: [kelasId], references: [id], onDelete: Cascade)
+  mahasiswa User  @relation(fields: [mahasiswaId], references: [id], onDelete: Cascade)
+
+  @@unique([kelasId, mahasiswaId])
+  @@map("nilai")
+}
+
+model TranskripEntry {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  mahasiswaId String   @map("mahasiswa_id") @db.VarChar(36)
+  kelasId     String   @map("kelas_id") @db.VarChar(36) // referensi longgar, tanpa FK
+  kodeMk      String   @map("kode_mk") @db.VarChar(20)
+  mataKuliah  String   @map("mata_kuliah") @db.VarChar(100)
+  sks         Int
+  semester    String   @db.VarChar(20)
+  nilaiAngka  Float    @map("nilai_angka")
+  nilaiHuruf  String   @map("nilai_huruf") @db.VarChar(2)
+  bobot       Float
+  syncedAt    DateTime @default(now()) @map("synced_at")
+
+  mahasiswa User @relation(fields: [mahasiswaId], references: [id], onDelete: Cascade)
+
+  @@unique([mahasiswaId, kelasId]) // kunci upsert → sinkron bisa diulang aman
+  @@map("transkrip_entries")
+}
+
+model AuditLog {
+  id          Int           @id @default(autoincrement())
+  createdAt   DateTime      @default(now()) @map("created_at")
+  requestId   String        @map("request_id") @db.VarChar(36)
+  subjectType SubjectType   @map("subject_type")
+  subjectId   String?       @map("subject_id") @db.VarChar(60) // user id atau client id
+  role        String?       @db.VarChar(20)
+  method      String        @db.VarChar(10)
+  endpoint    String        @db.VarChar(255)
+  deviceId    String?       @map("device_id") @db.VarChar(100)
+  ip          String?       @db.VarChar(64)
+  decision    AuditDecision
+  reason      String        @db.VarChar(80)
+
+  @@index([createdAt])
+  @@index([subjectId])
+  @@map("audit_logs")
+}

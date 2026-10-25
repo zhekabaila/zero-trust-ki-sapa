@@ -1,0 +1,145 @@
+# Kontrak API gateway (Fase 7). Sumber kebenaran naratif tetap docs/API.md.
+openapi: 3.0.3
+info:
+  title: Sistem Nilai Zero Trust
+  version: 1.0.0
+  description: >
+    Gateway satu-satunya pintu masuk (port 3000). Kebijakan akses mengikuti Tabel 3;
+    setiap keputusan (ALLOW/DENY) tercatat di audit log.
+servers:
+  - url: http://localhost:3000
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    deviceHeader:
+      type: apiKey
+      in: header
+      name: X-Device-ID
+  schemas:
+    Success:
+      type: object
+      properties:
+        success: { type: boolean }
+        data: { type: object }
+    Fail:
+      type: object
+      properties:
+        success: { type: boolean, enum: [false] }
+        error:
+          type: object
+          properties:
+            code: { type: string, example: CLASS_NOT_OWNED }
+            message: { type: string }
+paths:
+  /health:
+    get:
+      summary: Liveness probe (tanpa autentikasi)
+      responses:
+        '200': { description: ok }
+  /auth/login:
+    post:
+      summary: Login user → access token 10m + refresh token 1 hari
+      security: [{ deviceHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        '200': { description: token issued, content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } } }
+        '401': { description: LOGIN_INVALID_CREDENTIALS }
+        '403': { description: DEVICE_HEADER_MISSING / DEVICE_NOT_REGISTERED }
+  /auth/refresh:
+    post:
+      summary: Rotasi refresh token (token lama dicabut)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [refreshToken], properties: { refreshToken: { type: string } } }
+      responses:
+        '200': { description: pasangan token baru }
+        '401': { description: REFRESH_INVALID / REFRESH_REVOKED / REFRESH_EXPIRED }
+  /auth/logout:
+    post:
+      summary: Cabut refresh token (idempotent)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [refreshToken], properties: { refreshToken: { type: string } } }
+      responses:
+        '200': { description: dicabut }
+  /auth/service:
+    post:
+      summary: Service client → token service 5m (dipakai antar-service lewat gateway)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clientId, clientSecret]
+              properties: { clientId: { type: string }, clientSecret: { type: string } }
+      responses:
+        '200': { description: service token }
+        '401': { description: SERVICE_CLIENT_INVALID }
+  /nilai:
+    get:
+      summary: "Daftar nilai (mahasiswa: miliknya FINAL; dosen: kelasnya)"
+      security: [{ bearerAuth: [] }, { deviceHeader: [] }]
+      parameters:
+        - { in: query, name: nim, schema: { type: string } }
+        - { in: query, name: kelasId, schema: { type: string } }
+      responses:
+        '200': { description: daftar nilai }
+        '401': { description: TOKEN_* }
+        '403': { description: keputusan Policy Engine (lihat POLICY.md §2) }
+  /nilai/{id}:
+    put:
+      summary: Ubah skor (dosen pengampu, status DRAFT, dalam jam akses)
+      security: [{ bearerAuth: [] }, { deviceHeader: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [score], properties: { score: { type: number, minimum: 0, maximum: 100 } } }
+      responses:
+        '200': { description: nilai terbaru }
+        '403': { description: CLASS_NOT_OWNED / NILAI_ALREADY_FINAL / OUTSIDE_ACCESS_HOURS / ROLE_NOT_ALLOWED }
+  /kelas/{id}/finalisasi:
+    post:
+      summary: "Final kelas - semua nilai FINAL - sinkron transkrip lewat gateway"
+      security: [{ bearerAuth: [] }, { deviceHeader: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: "transkripTersinkron: true" }
+        '403': { description: CLASS_NOT_OWNED / OUTSIDE_ACCESS_HOURS }
+        '409': { description: KELAS_SUDAH_FINAL }
+        '422': { description: NILAI_KOSONG }
+        '502': { description: SINKRON_TRANSKRIP_GAGAL (nilai tetap FINAL; ulangi untuk retry) }
+  /transkrip/{nim}:
+    get:
+      summary: "Transkrip + IPK (mahasiswa: miliknya; admin: semua)"
+      security: [{ bearerAuth: [] }, { deviceHeader: [] }]
+      parameters: [{ in: path, name: nim, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: transkrip }
+        '403': { description: NOT_OWNER / ROLE_NOT_ALLOWED }
+        '404': { description: NIM tidak ditemukan }
+  /transkrip/sinkron:
+    post:
+      summary: Upsert snapshot nilai ke transkrip — HANYA token service
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: jumlahDisinkron }
+        '403': { description: SERVICE_ONLY (token user ditolak) }
